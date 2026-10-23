@@ -37,6 +37,26 @@ static Completion control_io, rx_io, tx_io;
 static int rx_pending, tx_pending;
 static unsigned int tx_age;
 
+/* Diagnostic reads only: USBD uses OHCI base BF801600; its two root-port
+ * status registers are at offsets 54/58. Reading does not clear them. */
+static void scan_bus(void)
+{
+    unsigned int ids[4] = {0, 0, 0, 0}, count = 0;
+    const volatile unsigned int *ports = (const volatile unsigned int *)0xbf801654;
+    int id;
+    for (id = 1; id < 32; ++id) {
+        UsbDeviceDescriptor *desc = sceUsbdScanStaticDescriptor(id, NULL, USB_DT_DEVICE);
+        if (desc) {
+            if (count < 4) ids[count] = ((unsigned int)desc->idVendor << 16) | desc->idProduct;
+            ++count;
+        }
+    }
+    memcpy((void *)status.usb_ids, ids, sizeof(ids));
+    status.port_status[0] = ports[0];
+    status.port_status[1] = ports[1];
+    status.usb_devices_seen = count;
+}
+
 static void complete(int result, int count, void *arg)
 {
     Completion *io = arg;
@@ -329,14 +349,21 @@ static void worker(void *arg)
 {
     unsigned int ticks = 0;
     (void)arg;
-    while (enabled && device < 0) DelayThread(10000);
+    while (enabled && device < 0) {
+        if (ticks++ % 50 == 0) scan_bus();
+        DelayThread(10000);
+    }
     if (enabled && !disconnected) {
+        scan_bus();
         status.state = AX_CONFIGURING;
         if (initialize_chip() < 0) goto failed;
         while (enabled && !disconnected) {
             status.stage = 5;
             if (service_receive() < 0 || service_transmit() < 0) goto failed;
-            if (ticks++ % 250 == 0 && update_link() < 0) goto failed;
+            if (ticks++ % 250 == 0) {
+                scan_bus();
+                if (update_link() < 0) goto failed;
+            }
             DelayThread(1000);
         }
     }
@@ -353,6 +380,7 @@ done:
 static int probe(int id)
 {
     UsbDeviceDescriptor *desc;
+    ++status.probe_count;
     if (device >= 0) return 0;
     desc = sceUsbdScanStaticDescriptor(id, NULL, USB_DT_DEVICE);
     return desc && desc->idVendor == 0x0b95 && desc->idProduct == 0x1790;

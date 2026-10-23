@@ -13,5 +13,10 @@ typedef struct {
     int stage;
     unsigned int phy_status;
     unsigned int rx_frames, tx_frames, rx_dropped, tx_dropped;
+    unsigned int usb_devices_seen, probe_count;
+    unsigned int usb_ids[4]; /* VID in high 16 bits, PID in low 16 bits. */
+    unsigned int port_status[2]; /* Passive OHCI root-port register snapshot. */
 } Ax88179Status;
+/* NETMAN RPC has a fixed 64-byte output buffer. Never exceed it. */
+typedef char Ax88179StatusFitsRpc[(sizeof(Ax88179Status) <= 64) ? 1 : -1];
 #endif

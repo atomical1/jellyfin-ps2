@@ -15,7 +15,7 @@ The first console test may expose issues requiring another driver revision.
 2. Insert the stick and the ASIX adapter into the two front PS2 USB ports.
 3. Connect the adapter to the router with an Ethernet cable before launching.
 4. Start `mass:/jellyfin-ps2-usb-ax88179.elf` in uLaunchELF/wLaunchELF.
-5. Confirm the splash identifies `usb-ax88179-experimental`, then press START
+5. Confirm the splash identifies `usb-ax88179-diag2`, then press START
    on the connect screen. Use the server computer's local HTTP address.
 
 The USB build loads NETMAN and the new AX88179 module. It does not load DEV9
@@ -27,6 +27,19 @@ NETMAN calls the physical USB device `ax0`.
 If there is no link, the error distinguishes no matching adapter, a USB
 disconnect, a driver setup failure, and a detected adapter without Ethernet
 link. Report the complete message, especially its step and USB result.
+
+Diagnostic build 2 loads the ASIX driver before USB mass storage and keyboard
+drivers, and starts USBD with `conf=2048` instead of its 512-byte descriptor
+cache. These address possible early device-detection failures; the original
+hardware test reached the driver but reported no matching adapter.
+
+If detection still fails, the error shows ready-device count, probe calls,
+USB VID:PID values, and the two raw OHCI root-port status registers. A matching
+`jfusbethernet.txt` is written beside settings.txt without any account tokens.
+Reconnect the stick to the PC after that screen appears so the log can be read.
+The status record is checked at compile time against NETMAN RPC's 64-byte
+maximum. A port's low bit is physical connection; bit 1 is enable, bit 8 power,
+and bit 9 low-speed mode. Reads do not alter port state.
 
 USB disconnect is detected and pending pipes are closed. **Relaunch after
 unplugging/reconnecting the USB adapter.** Ethernet cable reconnection is

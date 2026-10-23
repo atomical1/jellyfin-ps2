@@ -60,6 +60,35 @@ static int auth_header(char *out, int max, const char *token)
 }
 static char g_local_ip[20] = "0.0.0.0";
 
+#if JFPS2_USB_AX88179 && !SKIP_NETWORK
+static void usb_detection_log(const Ax88179Status *usb)
+{
+	char path[320];
+	const char *base = settings_path();
+	const char *separator = strrchr(base, '/');
+	if (!separator) separator = strrchr(base, ':');
+	snprintf(path, sizeof(path), "%.*sjfusbethernet.txt",
+	         separator ? (int)(separator - base + 1) : 0, base);
+	FILE *file = fopen(path, "w");
+	if (!file) return;
+	fprintf(file, "Jellyfin PS2 USB detection diagnostic 2\n"
+	        "build=%s\nstate=%d stage=%d usb_result=%d\n"
+	        "ready_devices=%u probe_calls=%u\n"
+	        "port1=%08X port2=%08X\n",
+	        JFPS2_BUILD, usb->state, usb->stage, usb->usb_error,
+	        usb->usb_devices_seen, usb->probe_count,
+	        usb->port_status[0], usb->port_status[1]);
+	for (int i = 0; i < 4; ++i)
+		fprintf(file, "device%d=%04X:%04X\n", i + 1,
+		        usb->usb_ids[i] >> 16, usb->usb_ids[i] & 0xffff);
+	fprintf(file, "phy=%04X rx=%u tx=%u rx_dropped=%u tx_dropped=%u\n",
+	        usb->phy_status, usb->rx_frames, usb->tx_frames,
+	        usb->rx_dropped, usb->tx_dropped);
+	fflush(file);
+	fclose(file);
+}
+#endif
+
 const char *net_link_help(void)
 {
 #if JFPS2_USB_AX88179 && !SKIP_NETWORK
@@ -68,9 +97,20 @@ const char *net_link_help(void)
 	if (NetManIoctl(AX88179_IOCTL_STATUS, NULL, 0, &usb, sizeof(usb)) < 0)
 		return "The USB Ethernet driver did not start. Relaunch the USB "
 		       "AX88179 build and check the module error on the connect screen.";
-	if (usb.state == AX_WAITING)
-		return "No ASIX AX88179 (0B95:1790) was detected. Plug it into "
-		       "the other front USB port and relaunch Jellyfin.";
+	usb_detection_log(&usb);
+	if (usb.state == AX_WAITING) {
+		snprintf(message, sizeof(message),
+		         "USB diag2: ready=%u probes=%u ports=%08X/%08X. "
+		         "IDs=%04X:%04X %04X:%04X %04X:%04X %04X:%04X. "
+		         "Log: jfusbethernet.txt",
+		         usb.usb_devices_seen, usb.probe_count,
+		         usb.port_status[0], usb.port_status[1],
+		         usb.usb_ids[0] >> 16, usb.usb_ids[0] & 0xffff,
+		         usb.usb_ids[1] >> 16, usb.usb_ids[1] & 0xffff,
+		         usb.usb_ids[2] >> 16, usb.usb_ids[2] & 0xffff,
+		         usb.usb_ids[3] >> 16, usb.usb_ids[3] & 0xffff);
+		return message;
+	}
 	if (usb.state == AX_DISCONNECTED)
 		return "The USB Ethernet adapter was unplugged. Reconnect it "
 		       "and relaunch Jellyfin.";

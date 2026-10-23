@@ -18,6 +18,7 @@ jellyfin.txt
 jfurl.txt
 jfdebug.txt
 jfstuck.txt
+jfusbethernet.txt
 
 # Docker image exports
 *.tar

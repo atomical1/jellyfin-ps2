@@ -71,14 +71,15 @@ static void note_failure(const char *name)
  * Load one IOP module from a buffer embedded in the ELF (bin2c), noting a
  * failure. Returns the module id, or negative.
  */
-static int load(const char *name, unsigned char *buf, unsigned int size)
+static int load_args(const char *name, unsigned char *buf, unsigned int size,
+                     int arg_len, const char *args)
 {
 	char msg[64];
 	snprintf(msg, sizeof(msg), "loading %s", name);
 	say(msg);
 
 	int ret = 0;
-	int id  = SifExecModuleBuffer(buf, size, 0, NULL, &ret);
+	int id  = SifExecModuleBuffer(buf, size, arg_len, args, &ret);
 
 	if (id < 0 || ret != 0) {
 		note_failure(name);
@@ -86,6 +87,11 @@ static int load(const char *name, unsigned char *buf, unsigned int size)
 	}
 
 	return id;
+}
+
+static int load(const char *name, unsigned char *buf, unsigned int size)
+{
+	return load_args(name, buf, size, 0, NULL);
 }
 
 /*
@@ -128,7 +134,17 @@ void mods_load(ModsProgress progress)
 		note_failure("padman");
 
 	/* USB: the keyboard and mass storage both sit on top of usbd. */
+#if JFPS2_USB_AX88179 && !SKIP_NETWORK
+	/* USBD silently skips devices when all configuration descriptors do
+	 * not fit its default 512-byte cache. Allow composite network devices. */
+	static const char usb_args[] = "conf=2048";
+	load_args("usbd", usbd_irx, size_usbd_irx, sizeof(usb_args), usb_args);
+	/* Give the exact ASIX ID priority over general class drivers. */
+	if (load("netman", netman_irx, size_netman_irx) >= 0)
+		load("ax88179", ax88179_irx, size_ax88179_irx);
+#else
 	load("usbd",    usbd_irx,        size_usbd_irx);
+#endif
 	load("bdm",     bdm_irx,         size_bdm_irx);
 	load("fatfs",   bdmfs_fatfs_irx, size_bdmfs_fatfs_irx);
 	load("usbmass", usbmass_bd_irx,  size_usbmass_bd_irx);
@@ -146,17 +162,11 @@ void mods_load(ModsProgress progress)
 #if SKIP_NETWORK
 	say("network skipped (SKIP_NETWORK=1)");
 	note_failure("network-skipped");
-#else
-#if JFPS2_USB_AX88179
-	/* The USB backend needs no DEV9/SMAP or Sony expansion-bay adapter. */
-	if (load("netman", netman_irx, size_netman_irx) >= 0)
-		load("ax88179", ax88179_irx, size_ax88179_irx);
-#else
+#elif !JFPS2_USB_AX88179
 	/* Native Ethernet: exactly the SDK sample's module set and order. */
 	load("dev9",   dev9_irx,   size_dev9_irx);
 	load("netman", netman_irx, size_netman_irx);
 	load("smap",   smap_irx,   size_smap_irx);
-#endif
 #endif
 
 	say("settling");
