@@ -5,10 +5,9 @@ It was written for an adapter reporting hardware revision **0200** on Windows.
 The driver switches revision 0200 and newer to the AX88179-compatible packet
 format. Other USB IDs and unrelated USB Ethernet chipsets are not supported.
 
-**Status: console testing confirms USB enumeration and Ethernet link; build 4
-completed three USB sends but no receive transfers. Build 5 changes receive
-startup and passes host tests. DHCP has not completed in console testing.**
-Packet exchange, DHCP and playback still require console validation.
+**Status: build 5 console testing confirms USB enumeration, Ethernet link,
+68 received frames, 7 USB sends, and DHCP reaching address-conflict checking.
+Build 6 extends the DHCP wait. A bound address and playback remain unverified.**
 
 ## Running
 
@@ -16,7 +15,7 @@ Packet exchange, DHCP and playback still require console validation.
 2. Insert the stick and the ASIX adapter into the two front PS2 USB ports.
 3. Connect the adapter to the router with an Ethernet cable before launching.
 4. Start `mass:/jellyfin-ps2-usb-ax88179.elf` in uLaunchELF/wLaunchELF.
-5. Confirm the splash identifies `usb-ax88179-diag5`, then press START
+5. Confirm the splash identifies `usb-ax88179-diag6`, then press START
    on the connect screen. Use the server computer's local HTTP address.
 
 The USB build loads NETMAN and the new AX88179 module. It does not load DEV9
@@ -65,7 +64,22 @@ MAC register readback verifies receive and medium enables; missing enable
 bits fail with error -6. The log includes actual receive-control, medium,
 USB speed, clock, queue, node ID, endpoint and revision values. USB transmit
 completion counts must match the submitted length. This is a candidate
-receive-path correction, not a confirmed fix for the hardware failure.
+receive-path correction. The next console log reported 69 receive completions,
+68 delivered frames, no malformed batches, and DHCP state 8 (CHECKING),
+establishing receive and DHCP reply processing on that run. One frame was
+dropped. Register readback showed enabled receive, a clear FIFO and full-speed
+USB. Hardware-normalized values were RX control 00AA, medium 0133, clock D9,
+and queue 07:00:00:00:0A.
+
+Build 6 gives the USB backend 30 seconds for DHCP instead of 12. If the client
+is checking the offered address at the deadline, it allows 12 additional
+seconds for the probes and announcements to finish. The wait remains bounded;
+it does not bypass conflict detection or accept a pending address. The screen
+reports DHCP phases and the log records elapsed seconds and state transitions.
+Missing interfaces, DHCP OFF and BOUND with address zero are not accepted as
+success. PS2SDK's getconfig failure value is zero, so these checks require its
+documented success value of one. This addresses a likely premature timeout;
+console confirmation of DHCP binding is still required.
 
 The vendored module adds a read-only ABI 1.3 diagnostic extension while
 retaining the original 1.2 API ordinals. The log includes non-ready devices'
@@ -138,6 +152,9 @@ FIFO still busy (-5), or receive-enable readback failure (-6).
 functions with a mock controller, covering operation order, all control
 failure points, a busy FIFO, bounded retries and failed enable readback.
 This verifies driver control flow, not the behavior of a physical ASIX chip.
+`tests/dhcp_wait_test.py` exercises the actual DHCP wait functions against
+delayed offers and conflict checks, including an offer near the deadline,
+auto-mode grace, bounded failure, missing interface, client OFF and zero IP.
 
 ## References and notices
 
@@ -155,6 +172,12 @@ ASIX's Linux driver; the register operations were independently implemented:
 
 - https://github.com/torvalds/linux/blob/v6.12/drivers/net/usb/ax88179_178a.c
 - https://android.googlesource.com/kernel/msm/+/a5c805aaf898b08538369b00e2f1dd7c6507e1d1/drivers/net/usb/ax88179_178a.c
+
+DHCP state CHECKING and the conflict-check completion path were checked against
+lwIP 2.2.1, which uses ACD probes and announcements before DHCP binding:
+
+- https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_1_RELEASE/src/core/ipv4/dhcp.c
+- https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_1_RELEASE/src/core/ipv4/acd.c
 
 See `third_party/AX88179-NOTICE.txt` for the FreeBSD attribution and license.
 The app retains its original MIT license; the new packet helpers are MIT.

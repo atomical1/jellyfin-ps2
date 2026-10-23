@@ -60,6 +60,24 @@ static int auth_header(char *out, int max, const char *token)
 }
 static char g_local_ip[20] = "0.0.0.0";
 
+#if !SKIP_NETWORK
+static int g_dhcp_state = -1, g_dhcp_elapsed;
+static char g_dhcp_trace[256];
+static const char *dhcp_phase(int state)
+{
+	switch (state) {
+	case DHCP_STATE_SELECTING: return "waiting for offer";
+	case DHCP_STATE_REQUESTING: return "requesting offered IP";
+	case DHCP_STATE_CHECKING: return "checking offered IP";
+	case DHCP_STATE_BOUND: return "address ready";
+	case DHCP_STATE_BACKING_OFF: return "address conflict/backoff";
+	case DHCP_STATE_OFF: return "client off";
+	case -1: return "interface missing";
+	default: return "negotiating";
+	}
+}
+#endif
+
 #if JFPS2_USB_AX88179 && !SKIP_NETWORK
 static void usb_detection_log(const Ax88179Status *usb)
 {
@@ -71,7 +89,7 @@ static void usb_detection_log(const Ax88179Status *usb)
 	         separator ? (int)(separator - base + 1) : 0, base);
 	FILE *file = fopen(path, "w");
 	if (!file) return;
-	fprintf(file, "Jellyfin PS2 USB network diagnostic 5\n"
+	fprintf(file, "Jellyfin PS2 USB network diagnostic 6\n"
 	        "build=%s\nstate=%d stage=%d usb_result=%d\n"
 	        "ready_devices=%u probe_calls=%u\n"
 	        "port1=%08X port2=%08X\n",
@@ -130,6 +148,8 @@ static void usb_detection_log(const Ax88179Status *usb)
 	} else {
 		fprintf(file, "tcpip_interface=unavailable\n");
 	}
+	fprintf(file, "dhcp_wait_seconds=%d dhcp_last_state=%d\ndhcp_transitions=%s\n",
+	        g_dhcp_elapsed, g_dhcp_state, g_dhcp_trace);
 	fflush(file);
 	fclose(file);
 }
@@ -146,7 +166,7 @@ const char *net_link_help(void)
 	usb_detection_log(&usb);
 	if (usb.state == AX_WAITING) {
 		snprintf(message, sizeof(message),
-		         "USB diag5: ready=%u probes=%u ports=%08X/%08X. "
+		         "USB diag6: ready=%u probes=%u ports=%08X/%08X. "
 		         "IDs=%04X:%04X %04X:%04X %04X:%04X %04X:%04X. "
 		         "Log: jfusbethernet.txt",
 		         usb.usb_devices_seen, usb.probe_count,
@@ -179,13 +199,14 @@ const char *net_address_help(void)
 {
 #if JFPS2_USB_AX88179 && !SKIP_NETWORK
 	Ax88179Status usb;
-	static char message[192];
+	static char message[256];
 	if (NetManIoctl(AX88179_IOCTL_STATUS, NULL, 0, &usb, sizeof(usb)) == 0) {
 		usb_detection_log(&usb);
 		snprintf(message, sizeof(message),
-		         "No DHCP address. USB diag5: state=%d step=%d error=%d "
+		         "DHCP: %s after %ds. USB diag6: state=%d step=%d error=%d "
 		         "TX=%u RX=%u dropped=%u/%u. Log: jfusbethernet.txt. "
 		         "Reconnect the stick to the PC after this screen.",
+		         dhcp_phase(g_dhcp_state), g_dhcp_elapsed,
 		         usb.state, usb.stage, usb.usb_error, usb.tx_frames, usb.rx_frames,
 		         usb.tx_dropped, usb.rx_dropped);
 		return message;
@@ -540,16 +561,45 @@ static int link_is_up(void)
 	       == NETMAN_NETIF_ETH_LINK_STATE_UP;
 }
 
-/* Whether DHCP has an address (or is off). */
+/* DHCP must have a bound, nonzero address. OFF is not a successful lease. */
 static int dhcp_is_bound(void)
 {
 	t_ip_info info;
 
-	if (ps2ip_getconfig("sm0", &info) < 0)
+	if (ps2ip_getconfig("sm0", &info) != 1) {
+		g_dhcp_state = -1;
 		return 0;
+	}
+	g_dhcp_state = info.dhcp_status;
 
-	return info.dhcp_status == DHCP_STATE_BOUND ||
-	       info.dhcp_status == DHCP_STATE_OFF;
+	return info.dhcp_status == DHCP_STATE_BOUND && info.ipaddr.s_addr != 0;
+}
+
+/* Allow a lease received near the deadline to finish its ACD probes.
+ * A CHECKING state is evidence of a server reply, not a completed lease. */
+static int wait_for_dhcp(int seconds)
+{
+	int limit = seconds, previous = -2;
+	char msg[96];
+	g_dhcp_trace[0] = '\0';
+	for (g_dhcp_elapsed = 0; g_dhcp_elapsed <= limit; ++g_dhcp_elapsed) {
+		int bound = dhcp_is_bound();
+		if (g_dhcp_state != previous) {
+			size_t used = strlen(g_dhcp_trace);
+			snprintf(g_dhcp_trace + used, sizeof(g_dhcp_trace) - used,
+			         "%s%d:%d", used ? "," : "", g_dhcp_elapsed, g_dhcp_state);
+			previous = g_dhcp_state;
+		}
+		if (bound) return 0;
+		if (g_dhcp_elapsed == seconds && g_dhcp_state == DHCP_STATE_CHECKING)
+			limit += DHCP_CHECK_TIMEOUT;
+		if (g_dhcp_elapsed == limit) return -1;
+		snprintf(msg, sizeof(msg), "net: DHCP %s %d/%d",
+		         dhcp_phase(g_dhcp_state), g_dhcp_elapsed + 1, limit);
+		say(msg);
+		net_snooze(1000);
+	}
+	return -1;
 }
 
 /* How the address was had, for the connect screen. */
@@ -567,7 +617,7 @@ static int set_static(void)
 	struct ip4_addr ip, nm, gw;
 	t_ip_info info;
 
-	if (ps2ip_getconfig("sm0", &info) < 0)
+	if (ps2ip_getconfig("sm0", &info) != 1)
 		return -4;
 
 	str_to_ip(settings.ip,   &ip);
@@ -589,7 +639,7 @@ static void record_local_ip(void)
 {
 	t_ip_info info;
 
-	if (ps2ip_getconfig("sm0", &info) < 0)
+	if (ps2ip_getconfig("sm0", &info) != 1)
 		return;
 
 	/*
@@ -670,7 +720,7 @@ int net_start(void)
 
 		t_ip_info info;
 
-		if (ps2ip_getconfig("sm0", &info) < 0) {
+		if (ps2ip_getconfig("sm0", &info) != 1) {
 			say("net: sm0 not registered");
 			return -4;
 		}
@@ -683,11 +733,12 @@ int net_start(void)
 		 * back to. Without one it is plain dhcp, with dhcp's patience.
 		 */
 		int fallback = settings.network == NET_AUTO && settings.ip[0];
-		int wait     = fallback ? AUTO_DHCP_TIMEOUT : DHCP_TIMEOUT;
+		int wait     = fallback ? AUTO_DHCP_TIMEOUT :
+		               (JFPS2_USB_AX88179 ? USB_DHCP_TIMEOUT : DHCP_TIMEOUT);
 
 		say("net: asking router for an address");
 
-		if (wait_for(dhcp_is_bound, wait, "dhcp") == 0) {
+		if (wait_for_dhcp(wait) == 0) {
 			g_net_how = "from router";
 		} else if (fallback) {
 			say("net: no router, using static address");

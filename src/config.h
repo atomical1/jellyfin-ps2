@@ -158,6 +158,9 @@
 /* Seconds to wait. Both report a clear error rather than hanging. */
 #define LINK_TIMEOUT 8
 #define DHCP_TIMEOUT 12
+/* USB startup/retries plus lwIP's address-conflict probes can exceed 12s. */
+#define USB_DHCP_TIMEOUT 30
+#define DHCP_CHECK_TIMEOUT 12
 
 /* network=auto asks the router only this long before using the static
  * lines: on a direct cable, this is what every start waits. */
