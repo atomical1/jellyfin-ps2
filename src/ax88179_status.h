@@ -5,6 +5,7 @@
 #define AX88179_IOCTL_STATUS 0x41580001u
 #define AX88179_IOCTL_ENUMERATION 0x41580002u
 #define AX88179_IOCTL_TRAFFIC 0x41580003u
+#define AX88179_IOCTL_REGISTERS 0x41580004u
 enum {
     AX_WAITING = 0, AX_CONFIGURING, AX_READY, AX_LINK_UP,
     AX_FAILED, AX_DISCONNECTED, AX_STOPPED
@@ -30,4 +31,11 @@ typedef struct {
     unsigned char rx_header[12], tx_header[12]; /* Ethernet MACs only. */
 } Ax88179Traffic;
 typedef char Ax88179TrafficFitsRpc[(sizeof(Ax88179Traffic) <= 64) ? 1 : -1];
+
+typedef struct {
+    unsigned int valid, restarts, fifo_status, rx_control, medium, usb_status, clock;
+    unsigned char bulk[5], node[6];
+    unsigned int in_endpoint, out_endpoint, revision, configuration;
+} Ax88179Registers;
+typedef char Ax88179RegistersFitsRpc[(sizeof(Ax88179Registers) <= 64) ? 1 : -1];
 #endif

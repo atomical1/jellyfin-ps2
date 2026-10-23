@@ -30,6 +30,7 @@ static int link_up, link_mode = NETMAN_NETIF_ETH_LINK_MODE_AUTO;
 static unsigned char mac[6];
 static volatile Ax88179Status status;
 static Ax88179Traffic traffic;
+static Ax88179Registers registers;
 static UsbDeviceRequest request;
 static unsigned char control_buffer[64] __attribute__((aligned(64)));
 static unsigned char rx_buffer[AX_RX_BUFFER_SIZE] __attribute__((aligned(64)));
@@ -116,6 +117,72 @@ static int write16(int reg, unsigned short value)
     return control(0x40, 1, reg, 2, data, 2);
 }
 
+static int read16(int reg, unsigned int *value)
+{
+    unsigned char bytes[2];
+    if (control(0xc0, 1, reg, 2, bytes, 2) < 0) return -1;
+    *value = bytes[0] | ((unsigned int)bytes[1] << 8);
+    return 0;
+}
+
+/* ASIX's zero-size queue mode also zeros the batching timer. It fits our
+ * 2 KiB buffer without retaining a desktop-sized aggregate in the device. */
+static int configure_receive_queue(void)
+{
+    unsigned char bulk[5] = {7, 0, 0, 0, 8};
+    return control(0x40, 1, 0x2e, 5, bulk, 5);
+}
+
+static int snapshot_registers(void)
+{
+    unsigned char usb_status, clock;
+    registers.valid = 0;
+    if (read16(0x0b, &registers.rx_control) < 0 ||
+        read16(0x22, &registers.medium) < 0 ||
+        control(0xc0, 1, 0x02, 1, &usb_status, 1) < 0 ||
+        control(0xc0, 1, 0x33, 1, &clock, 1) < 0 ||
+        control(0xc0, 1, 0x2e, 5, registers.bulk, 5) < 0 ||
+        control(0xc0, 1, 0x10, 6, registers.node, 6) < 0) return -1;
+    registers.usb_status = usb_status;
+    registers.clock = clock;
+    registers.in_endpoint = input_endpoint.bEndpointAddress;
+    registers.out_endpoint = output_endpoint.bEndpointAddress;
+    registers.revision = bcd_device;
+    registers.configuration = config_value;
+    registers.valid = 1;
+    return 0;
+}
+
+/* Restart after autonegotiation, before announcing the link to lwIP.
+ * A USB OUT completion alone does not establish that the MAC sent a frame.
+ * The ASIX link-up sequence drains the controller FIFO via RX stop/start. */
+static int restart_receiver(unsigned short medium)
+{
+    unsigned char fifo[4];
+    unsigned int tries;
+    status.stage = 6;
+    ++registers.restarts;
+    for (tries = 0; tries < 100; ++tries) {
+        if (write16(0x0b, 0) < 0 || configure_receive_queue() < 0 ||
+            control(0x40, 1, 0x10, 6, mac, 6) < 0 ||
+            write16(0x0b, 0x01aa) < 0 ||
+            control(0xc0, 0x81, 0x8c, 0, fifo, 4) < 0) return -1;
+        registers.fifo_status = (unsigned int)fifo[0] | ((unsigned int)fifo[1] << 8) |
+            ((unsigned int)fifo[2] << 16) | ((unsigned int)fifo[3] << 24);
+        if (!(registers.fifo_status & 0x40000000u)) break;
+        DelayThread(1000);
+    }
+    if (tries == 100) { status.usb_error = -5; return -1; }
+    if (write16(0x22, medium) < 0) return -1;
+    status.stage = 7;
+    if (snapshot_registers() < 0) return -1;
+    if (!(registers.rx_control & 0x0080) || !(registers.medium & 0x0100)) {
+        status.usb_error = -6;
+        return -1;
+    }
+    return 0;
+}
+
 static int phy_read(int reg, unsigned short *value)
 {
     unsigned char data[2];
@@ -139,6 +206,9 @@ static int interface_ioctl(unsigned int command, void *args,
 {
     (void)args; (void)args_len;
     switch (command) {
+    case AX88179_IOCTL_REGISTERS:
+        if (!out || len < sizeof(registers)) return -EINVAL;
+        memcpy(out, &registers, sizeof(registers)); return 0;
     case AX88179_IOCTL_TRAFFIC:
         if (!out || len < sizeof(traffic)) return -EINVAL;
         memcpy(out, &traffic, sizeof(traffic)); return 0;
@@ -242,10 +312,6 @@ static int initialize_chip(void)
 {
     unsigned short bmcr;
     unsigned int i, all_zero = 1, all_ff = 1;
-    /* Full-speed timing with a 2 KiB aggregate limit. PS2 USBD can only
-     * cover two memory pages per transfer, so the desktop 26 KiB buffer
-     * must not be used. A complete normal Ethernet frame fits in 2 KiB. */
-    unsigned char bulk[5] = {7, 0xcc, 0x4c, 0, 8};
     unsigned char zero = 0;
     status.stage = 1;
     control_pipe = sceUsbdOpenPipe(device, NULL);
@@ -265,11 +331,11 @@ static int initialize_chip(void)
     if (control(0xc0, 1, 0x10, 6, mac, 6) < 0) return -1;
     for (i = 0; i < 6; ++i) { if (mac[i]) all_zero = 0; if (mac[i] != 0xff) all_ff = 0; }
     if (all_zero || all_ff || (mac[0] & 1)) return -1;
-    if (control(0x40, 1, 0x2e, 5, bulk, 5) < 0 ||
+    if (configure_receive_queue() < 0 ||
         write8(0x54, 0x52) < 0 || write8(0x55, 0x34) < 0 ||
         write8(0x34, 0) < 0 || write8(0x35, 0) < 0 || /* No checksum offload. */
         write8(0x24, 0) < 0 || /* No wake-on-LAN. */
-        write16(0x0b, 0x01aa) < 0) return -1; /* Receive, unicast/bcast/mcast, no IPE. */
+        write16(0x0b, 0) < 0) return -1; /* Start receiving after link negotiation. */
     status.stage = 4;
     if (phy_read(0, &bmcr) < 0 || phy_write(0, (bmcr & ~0x0800) | 0x1200) < 0)
         return -1;
@@ -287,7 +353,7 @@ static int update_link(void)
     if (phy & 0x2000) medium |= 2;
     if ((phy & 0xc000) == 0x8000) medium |= 9;
     else if ((phy & 0xc000) == 0x4000) medium |= 0x0200;
-    if (write16(0x22, medium) < 0) return -1;
+    if (restart_receiver(medium) < 0) return -1;
     /* NETMAN has no gigabit enum; report the closest available mode. */
     if (phy & 0xc000) link_mode = (phy & 0x2000) ?
         NETMAN_NETIF_ETH_LINK_MODE_100M_FDX : NETMAN_NETIF_ETH_LINK_MODE_100M_HDX;
@@ -361,8 +427,8 @@ static int service_transmit(void)
         tx_pending = 0;
         traffic.last_tx_result = tx_io.result;
         traffic.last_tx_count = tx_io.count;
-        if (tx_io.result != USB_RC_OK) {
-            ++status.tx_dropped; status.usb_error = tx_io.result; return -1;
+        if (tx_io.result != USB_RC_OK || tx_io.count != traffic.last_tx_size) {
+            ++status.tx_dropped; status.usb_error = tx_io.result ? tx_io.result : -2; return -1;
         }
         ++status.tx_frames;
     }

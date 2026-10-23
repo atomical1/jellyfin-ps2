@@ -5,8 +5,9 @@ It was written for an adapter reporting hardware revision **0200** on Windows.
 The driver switches revision 0200 and newer to the AX88179-compatible packet
 format. Other USB IDs and unrelated USB Ethernet chipsets are not supported.
 
-**Status: console testing confirms USB enumeration and Ethernet link with build 3;
-DHCP has not completed. Build 4 adds packet diagnostics and passes host tests.**
+**Status: console testing confirms USB enumeration and Ethernet link; build 4
+completed three USB sends but no receive transfers. Build 5 changes receive
+startup and passes host tests. DHCP has not completed in console testing.**
 Packet exchange, DHCP and playback still require console validation.
 
 ## Running
@@ -15,7 +16,7 @@ Packet exchange, DHCP and playback still require console validation.
 2. Insert the stick and the ASIX adapter into the two front PS2 USB ports.
 3. Connect the adapter to the router with an Ethernet cable before launching.
 4. Start `mass:/jellyfin-ps2-usb-ax88179.elf` in uLaunchELF/wLaunchELF.
-5. Confirm the splash identifies `usb-ax88179-diag4`, then press START
+5. Confirm the splash identifies `usb-ax88179-diag5`, then press START
    on the connect screen. Use the server computer's local HTTP address.
 
 The USB build loads NETMAN and the new AX88179 module. It does not load DEV9
@@ -53,8 +54,18 @@ parse failures, transmit submissions and completion results, Ethernet MAC
 addresses and the TCP/IP interface's DHCP state. No packet payloads, account
 tokens or credentials are recorded. These counters distinguish a silent
 network path from transfers failing or arriving in an unexpected format.
-With a wall jack, also test a cable directly to a known router LAN port to
-check the wall wiring independently of the experimental driver.
+The wall jack used in this test also works with the user's PC.
+
+Build 5 leaves receive stopped during PHY autonegotiation, then restarts
+the receive engine and drains the controller FIFO before announcing link
+to NETMAN. The FIFO check is bounded; a persistently busy FIFO fails with
+private error -5. The queue's zero-size setting now also zeros the batching
+timer, matching ASIX's zero-size queue mode. The MAC is restored explicitly.
+MAC register readback verifies receive and medium enables; missing enable
+bits fail with error -6. The log includes actual receive-control, medium,
+USB speed, clock, queue, node ID, endpoint and revision values. USB transmit
+completion counts must match the submitted length. This is a candidate
+receive-path correction, not a confirmed fix for the hardware failure.
 
 The vendored module adds a read-only ABI 1.3 diagnostic extension while
 retaining the original 1.2 API ordinals. The log includes non-ready devices'
@@ -107,6 +118,8 @@ against one, two, and three configurations with odd-length descriptors.
 - The controller is configured for 2 KiB receive aggregates. PS2 USBD limits
   each transfer to two memory pages; the desktop driver's 26 KiB full-speed
   buffer is unsuitable for this API.
+- Receive batching timers are zero in the zero-size queue mode. Link-up
+  restarts receiving before allowing DHCP to send, and reads back MAC state.
 - Hardware checksum offload and IP-alignment pseudoheaders are disabled.
   Frames are validated before delivery to NETMAN. lwIP computes checksums.
 - Control transfers have a bounded wait. A stalled transmit eventually stops
@@ -115,9 +128,16 @@ against one, two, and three configurations with odd-length descriptors.
   Returning success without its required down event would block the caller.
 
 Failure steps: 1 USB descriptors/configuration, 2 PHY power/clock, 3 MAC and
-receive setup, 4 autonegotiation, 5 running transfers/link polling. USB results
+receive setup, 4 autonegotiation, 5 running transfers/link polling, 6 receive
+restart/FIFO drain, 7 register readback. USB results
 are PS2 USBD error codes; negative private results mean timeout (-1), short
-control reply (-2), stuck transmit (-3), or incompatible descriptors (-4).
+control/data transfer (-2), stuck transmit (-3), incompatible descriptors (-4),
+FIFO still busy (-5), or receive-enable readback failure (-6).
+
+`tests/ax88179_link_test.py` exercises the actual receive-queue and restart
+functions with a mock controller, covering operation order, all control
+failure points, a busy FIFO, bounded retries and failed enable readback.
+This verifies driver control flow, not the behavior of a physical ASIX chip.
 
 ## References and notices
 
@@ -129,6 +149,12 @@ configuration and the revision-0200 compatibility mode:
 - https://github.com/freebsd/freebsd-src/blob/main/sys/dev/usb/net/if_axgereg.h
 - https://github.com/ps2dev/ps2sdk/blob/master/NETMAN.txt
 - https://github.com/ps2dev/ps2sdk/blob/master/iop/usb/usbd/include/usbd.h
+
+The receive stop/start and FIFO-status protocol was also checked against
+ASIX's Linux driver; the register operations were independently implemented:
+
+- https://github.com/torvalds/linux/blob/v6.12/drivers/net/usb/ax88179_178a.c
+- https://android.googlesource.com/kernel/msm/+/a5c805aaf898b08538369b00e2f1dd7c6507e1d1/drivers/net/usb/ax88179_178a.c
 
 See `third_party/AX88179-NOTICE.txt` for the FreeBSD attribution and license.
 The app retains its original MIT license; the new packet helpers are MIT.

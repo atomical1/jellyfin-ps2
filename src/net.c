@@ -71,7 +71,7 @@ static void usb_detection_log(const Ax88179Status *usb)
 	         separator ? (int)(separator - base + 1) : 0, base);
 	FILE *file = fopen(path, "w");
 	if (!file) return;
-	fprintf(file, "Jellyfin PS2 USB network diagnostic 4\n"
+	fprintf(file, "Jellyfin PS2 USB network diagnostic 5\n"
 	        "build=%s\nstate=%d stage=%d usb_result=%d\n"
 	        "ready_devices=%u probe_calls=%u\n"
 	        "port1=%08X port2=%08X\n",
@@ -106,6 +106,18 @@ static void usb_detection_log(const Ax88179Status *usb)
 			for (int i = 0; i < 12; ++i) fprintf(file, "%02X%s", h[i], i == 11 ? "\n" : ":");
 		}
 	}
+	Ax88179Registers registers;
+	if (NetManIoctl(AX88179_IOCTL_REGISTERS, NULL, 0, &registers, sizeof(registers)) == 0) {
+		fprintf(file, "registers_valid=%u rx_restarts=%u fifo=%08X rx_control=%04X "
+		        "medium=%04X usb_speed=%02X clock=%02X\n"
+		        "bulk=%02X:%02X:%02X:%02X:%02X endpoint_in=%02X endpoint_out=%02X revision=%04X config=%u\n"
+		        "node=%02X:%02X:%02X:%02X:%02X:%02X\n",
+		        registers.valid, registers.restarts, registers.fifo_status, registers.rx_control,
+		        registers.medium, registers.usb_status, registers.clock,
+		        registers.bulk[0], registers.bulk[1], registers.bulk[2], registers.bulk[3], registers.bulk[4],
+		        registers.in_endpoint, registers.out_endpoint, registers.revision, registers.configuration,
+		        registers.node[0], registers.node[1], registers.node[2], registers.node[3], registers.node[4], registers.node[5]);
+	}
 	t_ip_info info;
 	if (ps2ip_getconfig("sm0", &info) == 1) {
 		unsigned char ip[4];
@@ -134,7 +146,7 @@ const char *net_link_help(void)
 	usb_detection_log(&usb);
 	if (usb.state == AX_WAITING) {
 		snprintf(message, sizeof(message),
-		         "USB diag4: ready=%u probes=%u ports=%08X/%08X. "
+		         "USB diag5: ready=%u probes=%u ports=%08X/%08X. "
 		         "IDs=%04X:%04X %04X:%04X %04X:%04X %04X:%04X. "
 		         "Log: jfusbethernet.txt",
 		         usb.usb_devices_seen, usb.probe_count,
@@ -171,9 +183,9 @@ const char *net_address_help(void)
 	if (NetManIoctl(AX88179_IOCTL_STATUS, NULL, 0, &usb, sizeof(usb)) == 0) {
 		usb_detection_log(&usb);
 		snprintf(message, sizeof(message),
-		         "No DHCP address. USB diag4: state=%d step=%d error=%d "
+		         "No DHCP address. USB diag5: state=%d step=%d error=%d "
 		         "TX=%u RX=%u dropped=%u/%u. Log: jfusbethernet.txt. "
-		         "Test a cable directly to a router LAN port.",
+		         "Reconnect the stick to the PC after this screen.",
 		         usb.state, usb.stage, usb.usb_error, usb.tx_frames, usb.rx_frames,
 		         usb.tx_dropped, usb.rx_dropped);
 		return message;
