@@ -5,9 +5,9 @@ It was written for an adapter reporting hardware revision **0200** on Windows.
 The driver switches revision 0200 and newer to the AX88179-compatible packet
 format. Other USB IDs and unrelated USB Ethernet chipsets are not supported.
 
-**Status: diagnostic build 3 compiles and passes host tests; awaiting console validation.**
-Successful compilation does not establish USB enumeration, DHCP, or playback.
-The first console test may expose issues requiring another driver revision.
+**Status: console testing confirms USB enumeration and Ethernet link with build 3;
+DHCP has not completed. Build 4 adds packet diagnostics and passes host tests.**
+Packet exchange, DHCP and playback still require console validation.
 
 ## Running
 
@@ -15,7 +15,7 @@ The first console test may expose issues requiring another driver revision.
 2. Insert the stick and the ASIX adapter into the two front PS2 USB ports.
 3. Connect the adapter to the router with an Ethernet cable before launching.
 4. Start `mass:/jellyfin-ps2-usb-ax88179.elf` in uLaunchELF/wLaunchELF.
-5. Confirm the splash identifies `usb-ax88179-diag3`, then press START
+5. Confirm the splash identifies `usb-ax88179-diag4`, then press START
    on the connect screen. Use the server computer's local HTTP address.
 
 The USB build loads NETMAN and the new AX88179 module. It does not load DEV9
@@ -43,7 +43,18 @@ writing into the old destination. A regression test reproduced configuration
 1 writing to offset 18 instead of offset 57. The patch recomputes the
 destination and reads lengths from bytes at odd addresses. The test now
 passes with 1, 2, and 3 configurations under ASan/UBSan. This establishes a
-host-code defect; it does not yet prove the specific adapter's failure is fixed.
+host-code defect. The subsequent console test detected the adapter and reached
+Ethernet link, then timed out waiting for DHCP.
+
+Diagnostic build 4 also writes `jfusbethernet.txt` when DHCP fails. The error
+shows driver state, step, USB error, and sent/received/dropped frame counts.
+The log adds USB receive completions, byte counts, last receive footer and
+parse failures, transmit submissions and completion results, Ethernet MAC
+addresses and the TCP/IP interface's DHCP state. No packet payloads, account
+tokens or credentials are recorded. These counters distinguish a silent
+network path from transfers failing or arriving in an unexpected format.
+With a wall jack, also test a cable directly to a known router LAN port to
+check the wall wiring independently of the experimental driver.
 
 The vendored module adds a read-only ABI 1.3 diagnostic extension while
 retaining the original 1.2 API ordinals. The log includes non-ready devices'

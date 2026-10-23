@@ -29,6 +29,7 @@ static UsbEndpointDescriptor input_endpoint, output_endpoint;
 static int link_up, link_mode = NETMAN_NETIF_ETH_LINK_MODE_AUTO;
 static unsigned char mac[6];
 static volatile Ax88179Status status;
+static Ax88179Traffic traffic;
 static UsbDeviceRequest request;
 static unsigned char control_buffer[64] __attribute__((aligned(64)));
 static unsigned char rx_buffer[AX_RX_BUFFER_SIZE] __attribute__((aligned(64)));
@@ -138,6 +139,9 @@ static int interface_ioctl(unsigned int command, void *args,
 {
     (void)args; (void)args_len;
     switch (command) {
+    case AX88179_IOCTL_TRAFFIC:
+        if (!out || len < sizeof(traffic)) return -EINVAL;
+        memcpy(out, &traffic, sizeof(traffic)); return 0;
     case AX88179_IOCTL_ENUMERATION:
         if (!out || len < sizeof(enumeration_info)) return -EINVAL;
         memcpy(out, enumeration_info, sizeof(enumeration_info)); return 0;
@@ -311,12 +315,27 @@ static int service_receive(void)
     int rc;
     if (rx_pending && rx_io.done) {
         rx_pending = 0;
+        ++traffic.rx_completions;
+        traffic.last_rx_result = rx_io.result;
+        traffic.last_rx_size = rx_io.count;
+        traffic.last_rx_footer = 0;
+        if (rx_io.count > 0 && rx_io.count <= (int)sizeof(rx_buffer)) {
+            traffic.rx_bytes += rx_io.count;
+            if (rx_io.count >= 12) memcpy(traffic.rx_header, rx_buffer, 12);
+            if (rx_io.count >= 4) {
+                const unsigned char *p = rx_buffer + rx_io.count - 4;
+                traffic.last_rx_footer = (unsigned int)p[0] | ((unsigned int)p[1] << 8) |
+                    ((unsigned int)p[2] << 16) | ((unsigned int)p[3] << 24);
+            }
+        }
         if (rx_io.result != USB_RC_OK && rx_io.result != USB_RC_DATAUNDER) {
             status.usb_error = rx_io.result; return -1;
         }
         if (rx_io.count < 0 || rx_io.count > (int)sizeof(rx_buffer) ||
-            ax_parse_rx(rx_buffer, rx_io.count, receive_frame, NULL) < 0)
+            ax_parse_rx(rx_buffer, rx_io.count, receive_frame, NULL) < 0) {
             ++status.rx_dropped;
+            ++traffic.rx_bad_batches;
+        }
     }
     if (!rx_pending) {
         rx_io.done = 0;
@@ -340,12 +359,15 @@ static int service_transmit(void)
             return 0;
         }
         tx_pending = 0;
+        traffic.last_tx_result = tx_io.result;
+        traffic.last_tx_count = tx_io.count;
         if (tx_io.result != USB_RC_OK) {
             ++status.tx_dropped; status.usb_error = tx_io.result; return -1;
         }
         ++status.tx_frames;
     }
     if (!link_up || (size = NetManTxPacketNext(&payload)) <= 0) return 0;
+    if (size >= 12) memcpy(traffic.tx_header, payload, 12);
     count = ax_build_tx(tx_buffer, sizeof(tx_buffer), payload, size, tx_max_packet);
     NetManTxPacketDeQ(); /* USB uses our copy, never NETMAN's queue buffer. */
     if (count < 0) { ++status.tx_dropped; return 0; }
@@ -353,6 +375,8 @@ static int service_transmit(void)
     rc = sceUsbdTransferPipe(tx_pipe, tx_buffer, count, NULL, complete, &tx_io);
     if (rc != USB_RC_OK) { ++status.tx_dropped; status.usb_error = rc; return -1; }
     tx_pending = 1;
+    ++traffic.tx_submitted;
+    traffic.last_tx_size = count;
     tx_age = 0;
     return 0;
 }

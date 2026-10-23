@@ -4,6 +4,7 @@
 #define AX88179_STATUS_H
 #define AX88179_IOCTL_STATUS 0x41580001u
 #define AX88179_IOCTL_ENUMERATION 0x41580002u
+#define AX88179_IOCTL_TRAFFIC 0x41580003u
 enum {
     AX_WAITING = 0, AX_CONFIGURING, AX_READY, AX_LINK_UP,
     AX_FAILED, AX_DISCONNECTED, AX_STOPPED
@@ -20,4 +21,13 @@ typedef struct {
 } Ax88179Status;
 /* NETMAN RPC has a fixed 64-byte output buffer. Never exceed it. */
 typedef char Ax88179StatusFitsRpc[(sizeof(Ax88179Status) <= 64) ? 1 : -1];
+
+typedef struct {
+    unsigned int rx_completions, rx_bytes;
+    int last_rx_size, last_rx_result;
+    unsigned int last_rx_footer, rx_bad_batches, tx_submitted;
+    int last_tx_size, last_tx_result, last_tx_count;
+    unsigned char rx_header[12], tx_header[12]; /* Ethernet MACs only. */
+} Ax88179Traffic;
+typedef char Ax88179TrafficFitsRpc[(sizeof(Ax88179Traffic) <= 64) ? 1 : -1];
 #endif

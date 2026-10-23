@@ -34,6 +34,7 @@ void net_add_vblank_hook(void (*fn)(void));   /* a second, independent one */  /
 /* Brings up the network stack. Modules are loaded separately by mods.c. */
 int net_start(void);
 const char *net_link_help(void);
+const char *net_address_help(void);
 
 /* Tear the stack down before handing control back to the browser. */
 void net_stop(void);

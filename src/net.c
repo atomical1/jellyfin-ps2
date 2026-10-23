@@ -71,7 +71,7 @@ static void usb_detection_log(const Ax88179Status *usb)
 	         separator ? (int)(separator - base + 1) : 0, base);
 	FILE *file = fopen(path, "w");
 	if (!file) return;
-	fprintf(file, "Jellyfin PS2 USB detection diagnostic 3\n"
+	fprintf(file, "Jellyfin PS2 USB network diagnostic 4\n"
 	        "build=%s\nstate=%d stage=%d usb_result=%d\n"
 	        "ready_devices=%u probe_calls=%u\n"
 	        "port1=%08X port2=%08X\n",
@@ -92,6 +92,32 @@ static void usb_detection_log(const Ax88179Status *usb)
 	fprintf(file, "phy=%04X rx=%u tx=%u rx_dropped=%u tx_dropped=%u\n",
 	        usb->phy_status, usb->rx_frames, usb->tx_frames,
 	        usb->rx_dropped, usb->tx_dropped);
+	Ax88179Traffic traffic;
+	if (NetManIoctl(AX88179_IOCTL_TRAFFIC, NULL, 0, &traffic, sizeof(traffic)) == 0) {
+		fprintf(file, "rx_completions=%u rx_bytes=%u last_rx_size=%d last_rx_result=%d "
+		        "last_rx_footer=%08X rx_bad_batches=%u\n"
+		        "tx_submitted=%u last_tx_size=%d last_tx_result=%d last_tx_count=%d\n",
+		        traffic.rx_completions, traffic.rx_bytes, traffic.last_rx_size,
+		        traffic.last_rx_result, traffic.last_rx_footer, traffic.rx_bad_batches,
+		        traffic.tx_submitted, traffic.last_tx_size, traffic.last_tx_result, traffic.last_tx_count);
+		for (int direction = 0; direction < 2; ++direction) {
+			const unsigned char *h = direction ? traffic.tx_header : traffic.rx_header;
+			fprintf(file, "%s_macs=", direction ? "tx" : "rx");
+			for (int i = 0; i < 12; ++i) fprintf(file, "%02X%s", h[i], i == 11 ? "\n" : ":");
+		}
+	}
+	t_ip_info info;
+	if (ps2ip_getconfig("sm0", &info) == 1) {
+		unsigned char ip[4];
+		memcpy(ip, &info.ipaddr, sizeof(ip));
+		fprintf(file, "dhcp_enabled=%d dhcp_state=%d ip=%u.%u.%u.%u\n"
+		        "mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
+		        info.dhcp_enabled, info.dhcp_status, ip[0], ip[1], ip[2], ip[3],
+		        info.hw_addr[0], info.hw_addr[1], info.hw_addr[2],
+		        info.hw_addr[3], info.hw_addr[4], info.hw_addr[5]);
+	} else {
+		fprintf(file, "tcpip_interface=unavailable\n");
+	}
 	fflush(file);
 	fclose(file);
 }
@@ -108,7 +134,7 @@ const char *net_link_help(void)
 	usb_detection_log(&usb);
 	if (usb.state == AX_WAITING) {
 		snprintf(message, sizeof(message),
-		         "USB diag3: ready=%u probes=%u ports=%08X/%08X. "
+		         "USB diag4: ready=%u probes=%u ports=%08X/%08X. "
 		         "IDs=%04X:%04X %04X:%04X %04X:%04X %04X:%04X. "
 		         "Log: jfusbethernet.txt",
 		         usb.usb_devices_seen, usb.probe_count,
@@ -135,6 +161,26 @@ const char *net_link_help(void)
 	return "Ethernet never came up. Check the cable, and that the network "
 	       "adaptor is seated if this is a fat console.";
 #endif
+}
+
+const char *net_address_help(void)
+{
+#if JFPS2_USB_AX88179 && !SKIP_NETWORK
+	Ax88179Status usb;
+	static char message[192];
+	if (NetManIoctl(AX88179_IOCTL_STATUS, NULL, 0, &usb, sizeof(usb)) == 0) {
+		usb_detection_log(&usb);
+		snprintf(message, sizeof(message),
+		         "No DHCP address. USB diag4: state=%d step=%d error=%d "
+		         "TX=%u RX=%u dropped=%u/%u. Log: jfusbethernet.txt. "
+		         "Test a cable directly to a router LAN port.",
+		         usb.state, usb.stage, usb.usb_error, usb.tx_frames, usb.rx_frames,
+		         usb.tx_dropped, usb.rx_dropped);
+		return message;
+	}
+#endif
+	return "No IP address was obtained. Check the router's DHCP server. "
+	       "For a direct cable, set network=static and ip= in settings.txt.";
 }
 static unsigned g_last_port_net;      /* htons result, to prove it swapped */
 

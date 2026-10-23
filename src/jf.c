@@ -610,10 +610,7 @@ int jf_connect(void)
 	if (!g_net_up) {
 		int rc = net_start();
 		if (rc == -4)
-			return err("No address",
-			           "Ethernet is up but no router answered. Check its "
-			           "DHCP server, or on a direct cable set network=static "
-			           "(or auto) and ip= in settings.txt.");
+			return err("No address", "%s", net_address_help());
 
 		if (rc == -5)
 			return err("No address set",
