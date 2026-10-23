@@ -32,9 +32,13 @@ IRX_DECL(ps2kbd_irx)
 IRX_DECL(bdm_irx)
 IRX_DECL(bdmfs_fatfs_irx)
 IRX_DECL(usbmass_bd_irx)
-IRX_DECL(dev9_irx)
 IRX_DECL(netman_irx)
+#if JFPS2_USB_AX88179
+IRX_DECL(ax88179_irx)
+#else
+IRX_DECL(dev9_irx)
 IRX_DECL(smap_irx)
+#endif
 IRX_DECL(libsd_irx)
 IRX_DECL(audsrv_irx)
 
@@ -76,8 +80,10 @@ static int load(const char *name, unsigned char *buf, unsigned int size)
 	int ret = 0;
 	int id  = SifExecModuleBuffer(buf, size, 0, NULL, &ret);
 
-	if (id < 0)
+	if (id < 0 || ret != 0) {
 		note_failure(name);
+		return -1;
+	}
 
 	return id;
 }
@@ -141,10 +147,16 @@ void mods_load(ModsProgress progress)
 	say("network skipped (SKIP_NETWORK=1)");
 	note_failure("network-skipped");
 #else
-	/* Exactly the sample's set and order: DEV9, NETMAN, then SMAP. */
+#if JFPS2_USB_AX88179
+	/* The USB backend needs no DEV9/SMAP or Sony expansion-bay adapter. */
+	if (load("netman", netman_irx, size_netman_irx) >= 0)
+		load("ax88179", ax88179_irx, size_ax88179_irx);
+#else
+	/* Native Ethernet: exactly the SDK sample's module set and order. */
 	load("dev9",   dev9_irx,   size_dev9_irx);
 	load("netman", netman_irx, size_netman_irx);
 	load("smap",   smap_irx,   size_smap_irx);
+#endif
 #endif
 
 	say("settling");

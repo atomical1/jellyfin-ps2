@@ -36,6 +36,11 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+/* Selected by Makefile NETWORK=usb-ax88179; default hardware is SMAP. */
+#ifndef JFPS2_USB_AX88179
+#define JFPS2_USB_AX88179 0
+#endif
+
 /* Set by the Makefile (VERSION); this is only the fallback. */
 #ifndef JFPS2_VERSION
 #define JFPS2_VERSION "dev"

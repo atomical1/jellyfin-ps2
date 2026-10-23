@@ -7,7 +7,20 @@ VERSION ?= 2.0.0
 # "v2.0.0 build v58". Empty for a release: plain jellyfin-ps2.elf.
 BUILD ?=
 
-EE_BIN = jellyfin-ps2$(if $(BUILD),-$(BUILD)).elf
+NETWORK ?= smap
+ifeq ($(NETWORK),smap)
+NETWORK_IRX_SRCS = dev9_irx.c smap_irx.c
+USB_AX88179 = 0
+NETWORK_SUFFIX =
+else ifeq ($(NETWORK),usb-ax88179)
+NETWORK_IRX_SRCS = ax88179_irx.c
+USB_AX88179 = 1
+NETWORK_SUFFIX = -usb-ax88179
+else
+$(error NETWORK must be smap or usb-ax88179)
+endif
+
+EE_BIN = jellyfin-ps2$(NETWORK_SUFFIX)$(if $(BUILD),-$(BUILD)).elf
 
 SRC_OBJS = src/main.o   \
            src/app.o    \
@@ -48,10 +61,10 @@ SRC_OBJS = src/main.o   \
 # This SDK ships bin2c, not bin2o, so each IRX becomes a generated .c file
 # that the normal %.o rule then compiles.
 # Pad modules come from rom0 at runtime, not embedded.
-# The network needs exactly three: DEV9, NETMAN, SMAP. lwIP is EE-side.
+# NETMAN is shared; the selected backend supplies the hardware driver.
 IRX_SRCS = usbd_irx.c ps2kbd_irx.c \
            bdm_irx.c bdmfs_fatfs_irx.c usbmass_bd_irx.c \
-           dev9_irx.c netman_irx.c smap_irx.c \
+           netman_irx.c $(NETWORK_IRX_SRCS) \
            libsd_irx.c audsrv_irx.c
 
 IRX_OBJS = $(IRX_SRCS:.c=.o)
@@ -88,7 +101,9 @@ EE_LIBS = -lgskit_toolkit -lgskit -ldmakit $(PNG_LIBS) \
           -lmpeg -lpacket -ldma \
           -lnetman -lps2ip -lpatches -lkbd -lpad -ldebug -lm
 
-EE_CFLAGS = -Wall -O2 -G0 -DJFPS2_VERSION=\"$(VERSION)\" -DJFPS2_BUILD=\"$(BUILD)\"
+DISPLAY_BUILD = $(if $(BUILD),$(BUILD),$(if $(filter usb-ax88179,$(NETWORK)),usb-ax88179-experimental))
+EE_CFLAGS = -Wall -O2 -G0 -DJFPS2_VERSION=\"$(VERSION)\" -DJFPS2_BUILD=\"$(DISPLAY_BUILD)\"
+EE_CFLAGS += -DJFPS2_USB_AX88179=$(USB_AX88179)
 
 BIN2C  = $(PS2SDK)/bin/bin2c
 IRXDIR = $(PS2SDK)/iop/irx
@@ -113,12 +128,23 @@ all: gen_font gen_logo $(EE_BIN)
 
 .PHONY: clean gen_font gen_logo
 
+# A backend change must rebuild objects even when make clean was omitted.
+.PHONY: FORCE_NETWORK
+build/network-backend: FORCE_NETWORK
+	@mkdir -p build
+	@printf '%s\n' '$(NETWORK)|$(VERSION)|$(DISPLAY_BUILD)' > build/network-backend.new
+	@cmp -s build/network-backend.new $@ || cp build/network-backend.new $@
+	@rm -f build/network-backend.new
+
+$(SRC_OBJS): build/network-backend
+
 # Rasterise the font atlas before anything that includes it. Cheap, and it
 # means a font change never leaves a stale font_data.c behind.
 gen_font:
 	python3 tools/genfont.py
 
 src/font_data.o: gen_font
+	$(EE_C_COMPILE) -c src/font_data.c -o $@
 src/font.o:      gen_font
 
 # Converts assets/logo.png if present. Absent is fine: logo_width comes out
@@ -126,8 +152,9 @@ src/font.o:      gen_font
 gen_logo:
 	python3 tools/genlogo.py
 
-src/logo_data.o: gen_logo
 src/logo.o:      gen_logo
+src/logo_data.o: gen_logo
+	$(EE_C_COMPILE) -c src/logo_data.c -o $@
 
 clean:
 	rm -f $(EE_BIN) $(EE_OBJS) $(IRX_SRCS) src/font_data.c src/logo_data.c \
@@ -156,6 +183,18 @@ netman_irx.c: $(IRX_NETMAN)
 	$(BIN2C) $< $@ netman_irx
 smap_irx.c: $(IRX_SMAP)
 	$(BIN2C) $< $@ smap_irx
+
+.PHONY: ax88179-driver
+ax88179-driver:
+	$(MAKE) -C iop/ax88179
+
+iop/ax88179/ax88179.irx: ax88179-driver
+
+ax88179_irx.c: iop/ax88179/ax88179.irx
+	$(BIN2C) $< $@ ax88179_irx
+
+src/net.o: src/ax88179_status.h src/net.h
+src/jf.o: src/net.h
 libsd_irx.c: $(IRX_LIBSD)
 	$(BIN2C) $< $@ libsd_irx
 audsrv_irx.c: $(IRX_AUDSRV)

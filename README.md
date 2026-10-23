@@ -1,5 +1,9 @@
 # Jellyfin PS2
 
+> This fork includes experimental USB Ethernet support for ASIX 0B95:1790
+> adapters. It compiles and passes host packet tests, but has not yet been
+> tested on a real PS2. See [USB Ethernet setup and build instructions](docs/USB-ETHERNET.md).
+
 A native Jellyfin client for the PlayStation 2. Browse your Jellyfin library,
 watch films and series, and listen to music on real PS2 hardware, launched
 from a USB stick.

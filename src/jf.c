@@ -621,10 +621,7 @@ int jf_connect(void)
 			           "line. Add one, e.g. ip=192.168.50.90.");
 
 		if (rc == -2)
-			return err("No network link",
-			           "Ethernet never came up. Check the cable, and that "
-			           "the network adaptor is seated if this is a fat "
-			           "console.");
+			return err("No network link", "%s", net_link_help());
 
 		if (rc < 0 && rc != -100)
 			return err("Network failed",

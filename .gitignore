@@ -1,6 +1,8 @@
 # Build output
 *.elf
 *.o
+*.irx
+*.notiopmod*.elf
 *_irx.c
 build/
 

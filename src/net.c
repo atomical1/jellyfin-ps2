@@ -8,6 +8,7 @@
 #include "net.h"
 #include "config.h"
 #include "settings.h"
+#include "ax88179_status.h"
 
 #include <netman.h>
 #include <ps2ip.h>
@@ -58,6 +59,35 @@ static int auth_header(char *out, int max, const char *token)
 	    "Version=\"0.1\"\r\n", g_device);
 }
 static char g_local_ip[20] = "0.0.0.0";
+
+const char *net_link_help(void)
+{
+#if JFPS2_USB_AX88179 && !SKIP_NETWORK
+	Ax88179Status usb;
+	static char message[192];
+	if (NetManIoctl(AX88179_IOCTL_STATUS, NULL, 0, &usb, sizeof(usb)) < 0)
+		return "The USB Ethernet driver did not start. Relaunch the USB "
+		       "AX88179 build and check the module error on the connect screen.";
+	if (usb.state == AX_WAITING)
+		return "No ASIX AX88179 (0B95:1790) was detected. Plug it into "
+		       "the other front USB port and relaunch Jellyfin.";
+	if (usb.state == AX_DISCONNECTED)
+		return "The USB Ethernet adapter was unplugged. Reconnect it "
+		       "and relaunch Jellyfin.";
+	if (usb.state == AX_FAILED || usb.state == AX_CONFIGURING) {
+		snprintf(message, sizeof(message),
+		         "USB Ethernet setup stopped at step %d (USB result %d). "
+		         "Relaunch Jellyfin and report these numbers.",
+		         usb.stage, usb.usb_error);
+		return message;
+	}
+	return "The USB adapter was detected, but Ethernet has no link. "
+	       "Check its cable and the router port, then try again.";
+#else
+	return "Ethernet never came up. Check the cable, and that the network "
+	       "adaptor is seated if this is a fat console.";
+#endif
+}
 static unsigned g_last_port_net;      /* htons result, to prove it swapped */
 
 static long g_last_status;
@@ -488,6 +518,7 @@ int net_start(void)
 		return -1;
 	}
 
+#if !JFPS2_USB_AX88179
 	say("net: link mode auto");
 	rc = NetManSetLinkMode(NETMAN_NETIF_ETH_LINK_MODE_AUTO);
 	if (rc != 0) {
@@ -495,6 +526,7 @@ int net_start(void)
 		snprintf(msg, sizeof(msg), "net: link mode rejected (%d)", rc);
 		say(msg);
 	}
+#endif
 
 #if REQUIRE_LINK
 	/* Catch an unplugged cable here, where the message can say so. */
