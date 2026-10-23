@@ -71,7 +71,7 @@ static void usb_detection_log(const Ax88179Status *usb)
 	         separator ? (int)(separator - base + 1) : 0, base);
 	FILE *file = fopen(path, "w");
 	if (!file) return;
-	fprintf(file, "Jellyfin PS2 USB detection diagnostic 2\n"
+	fprintf(file, "Jellyfin PS2 USB detection diagnostic 3\n"
 	        "build=%s\nstate=%d stage=%d usb_result=%d\n"
 	        "ready_devices=%u probe_calls=%u\n"
 	        "port1=%08X port2=%08X\n",
@@ -81,6 +81,14 @@ static void usb_detection_log(const Ax88179Status *usb)
 	for (int i = 0; i < 4; ++i)
 		fprintf(file, "device%d=%04X:%04X\n", i + 1,
 		        usb->usb_ids[i] >> 16, usb->usb_ids[i] & 0xffff);
+	unsigned int enumeration[16];
+	if (NetManIoctl(AX88179_IOCTL_ENUMERATION, NULL, 0, enumeration, sizeof(enumeration)) == 0) {
+		for (int i = 0; i < 2; ++i) {
+			unsigned int *e = enumeration + i * 8;
+			fprintf(file, "pending%d: id=%u state=%u port=%u result=%u request=%06X length=%u cursor=%u identity=%04X:%04X\n",
+			        i + 1, e[0], e[1], e[2], e[3], e[4], e[5], e[6], e[7] >> 16, e[7] & 0xffff);
+		}
+	}
 	fprintf(file, "phy=%04X rx=%u tx=%u rx_dropped=%u tx_dropped=%u\n",
 	        usb->phy_status, usb->rx_frames, usb->tx_frames,
 	        usb->rx_dropped, usb->tx_dropped);
@@ -100,7 +108,7 @@ const char *net_link_help(void)
 	usb_detection_log(&usb);
 	if (usb.state == AX_WAITING) {
 		snprintf(message, sizeof(message),
-		         "USB diag2: ready=%u probes=%u ports=%08X/%08X. "
+		         "USB diag3: ready=%u probes=%u ports=%08X/%08X. "
 		         "IDs=%04X:%04X %04X:%04X %04X:%04X %04X:%04X. "
 		         "Log: jfusbethernet.txt",
 		         usb.usb_devices_seen, usb.probe_count,

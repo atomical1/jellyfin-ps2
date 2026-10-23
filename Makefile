@@ -101,7 +101,7 @@ EE_LIBS = -lgskit_toolkit -lgskit -ldmakit $(PNG_LIBS) \
           -lmpeg -lpacket -ldma \
           -lnetman -lps2ip -lpatches -lkbd -lpad -ldebug -lm
 
-DISPLAY_BUILD = $(if $(BUILD),$(BUILD),$(if $(filter usb-ax88179,$(NETWORK)),usb-ax88179-diag2))
+DISPLAY_BUILD = $(if $(BUILD),$(BUILD),$(if $(filter usb-ax88179,$(NETWORK)),usb-ax88179-diag3))
 EE_CFLAGS = -Wall -O2 -G0 -DJFPS2_VERSION=\"$(VERSION)\" -DJFPS2_BUILD=\"$(DISPLAY_BUILD)\"
 EE_CFLAGS += -DJFPS2_USB_AX88179=$(USB_AX88179)
 
@@ -167,8 +167,18 @@ clean:
 # bin2c writes both <symbol> and size_<symbol>, which mods.c declares
 # extern. Filenames in iop/irx vary between SDK versions:
 #   docker-compose run --rm shell -c 'ls $$PS2SDK/iop/irx'
+ifeq ($(NETWORK),usb-ax88179)
+.PHONY: patched-usbd
+patched-usbd:
+	$(MAKE) -C third_party/ps2sdk-usbd
+third_party/ps2sdk-usbd/usbd.irx: patched-usbd
+usbd_irx.c: third_party/ps2sdk-usbd/usbd.irx
+	$(BIN2C) $< $@ usbd_irx
+else
 usbd_irx.c: $(IRXDIR)/usbd.irx
 	$(BIN2C) $< $@ usbd_irx
+endif
+usbd_irx.c: build/network-backend
 ps2kbd_irx.c: $(IRXDIR)/ps2kbd.irx
 	$(BIN2C) $< $@ ps2kbd_irx
 bdm_irx.c: $(IRXDIR)/bdm.irx

@@ -5,6 +5,7 @@ TEST_BIN = ../build/ax88179-frames-test
 .PHONY: all clean
 all: $(TEST_BIN)
 	$(TEST_BIN)
+	python3 usbd_enumeration_test.py
 
 $(TEST_BIN): ax88179_frames_test.c ../iop/ax88179/frames.c ../iop/ax88179/frames.h
 	mkdir -p ../build

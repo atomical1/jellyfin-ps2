@@ -36,12 +36,15 @@ static unsigned char tx_buffer[AX_FRAME_MAX + 16] __attribute__((aligned(64)));
 static Completion control_io, rx_io, tx_io;
 static int rx_pending, tx_pending;
 static unsigned int tx_age;
+static unsigned int enumeration_info[16];
 
 /* Diagnostic reads only: USBD uses OHCI base BF801600; its two root-port
  * status registers are at offsets 54/58. Reading does not clear them. */
 static void scan_bus(void)
 {
     unsigned int ids[4] = {0, 0, 0, 0}, count = 0;
+    unsigned int pending[16] = {0}, pending_count = 0;
+    u32 info[8];
     const volatile unsigned int *ports = (const volatile unsigned int *)0xbf801654;
     int id;
     for (id = 1; id < 32; ++id) {
@@ -50,11 +53,17 @@ static void scan_bus(void)
             if (count < 4) ids[count] = ((unsigned int)desc->idVendor << 16) | desc->idProduct;
             ++count;
         }
+        if (pending_count < 2 && sceUsbdGetEnumerationInfo(id, info) == USB_RC_OK &&
+            info[1] != 8) {
+            memcpy(pending + pending_count * 8, info, sizeof(info));
+            ++pending_count;
+        }
     }
     memcpy((void *)status.usb_ids, ids, sizeof(ids));
     status.port_status[0] = ports[0];
     status.port_status[1] = ports[1];
     status.usb_devices_seen = count;
+    memcpy(enumeration_info, pending, sizeof(pending));
 }
 
 static void complete(int result, int count, void *arg)
@@ -129,6 +138,9 @@ static int interface_ioctl(unsigned int command, void *args,
 {
     (void)args; (void)args_len;
     switch (command) {
+    case AX88179_IOCTL_ENUMERATION:
+        if (!out || len < sizeof(enumeration_info)) return -EINVAL;
+        memcpy(out, enumeration_info, sizeof(enumeration_info)); return 0;
     case AX88179_IOCTL_STATUS:
         if (!out || len < sizeof(Ax88179Status)) return -EINVAL;
         memcpy(out, (const void *)&status, sizeof(status)); return 0;

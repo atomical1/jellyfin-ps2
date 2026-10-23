@@ -5,7 +5,7 @@ It was written for an adapter reporting hardware revision **0200** on Windows.
 The driver switches revision 0200 and newer to the AX88179-compatible packet
 format. Other USB IDs and unrelated USB Ethernet chipsets are not supported.
 
-**Status: compiles and passes host packet tests; not yet tested on a real PS2.**
+**Status: diagnostic build 3 compiles and passes host tests; awaiting console validation.**
 Successful compilation does not establish USB enumeration, DHCP, or playback.
 The first console test may expose issues requiring another driver revision.
 
@@ -15,7 +15,7 @@ The first console test may expose issues requiring another driver revision.
 2. Insert the stick and the ASIX adapter into the two front PS2 USB ports.
 3. Connect the adapter to the router with an Ethernet cable before launching.
 4. Start `mass:/jellyfin-ps2-usb-ax88179.elf` in uLaunchELF/wLaunchELF.
-5. Confirm the splash identifies `usb-ax88179-diag2`, then press START
+5. Confirm the splash identifies `usb-ax88179-diag3`, then press START
    on the connect screen. Use the server computer's local HTTP address.
 
 The USB build loads NETMAN and the new AX88179 module. It does not load DEV9
@@ -37,6 +37,21 @@ If detection still fails, the error shows ready-device count, probe calls,
 USB VID:PID values, and the two raw OHCI root-port status registers. A matching
 `jfusbethernet.txt` is written beside settings.txt without any account tokens.
 Reconnect the stick to the PC after that screen appears so the log can be read.
+Diagnostic build 3 also embeds a corrected PS2SDK USBD module. Its original
+multi-configuration fetch advanced the cached descriptor pointer but kept
+writing into the old destination. A regression test reproduced configuration
+1 writing to offset 18 instead of offset 57. The patch recomputes the
+destination and reads lengths from bytes at odd addresses. The test now
+passes with 1, 2, and 3 configurations under ASan/UBSan. This establishes a
+host-code defect; it does not yet prove the specific adapter's failure is fixed.
+
+The vendored module adds a read-only ABI 1.3 diagnostic extension while
+retaining the original 1.2 API ordinals. The log includes non-ready devices'
+enumeration state, last descriptor request, result, and configuration cursor.
+Source provenance and local changes are in `third_party/ps2sdk-usbd/NOTICE.md`;
+that component is Academic Free License 2.0, with the full license beside it.
+Native SMAP builds continue to embed the original USB module from the image.
+
 The status record is checked at compile time against NETMAN RPC's 64-byte
 maximum. A port's low bit is physical connection; bit 1 is enable, bit 8 power,
 and bit 9 low-speed mode. Reads do not alter port state.
@@ -70,6 +85,8 @@ The tests cover aggregate bounds, dummy headers, CRC-damaged frames, invalid
 lengths, all normal Ethernet TX lengths and USB short-packet padding, and
 100,000 pseudorandom malformed batches under AddressSanitizer and UBSan.
 They do not emulate the ASIX chip or validate the PS2 USB controller.
+The same test command also runs the real vendored USB enumeration function
+against one, two, and three configurations with odd-length descriptors.
 
 ## Driver details
 
