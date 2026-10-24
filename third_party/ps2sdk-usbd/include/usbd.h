@@ -337,7 +337,7 @@ extern int sceUsbdMultiIsochronousTransfer(int pipeId, sceUsbdMultiIsochronousRe
 #define UsbGetReportDescriptor          sceUsbdGetReportDescriptor
 #define UsbMultiIsochronousTransfer     sceUsbdMultiIsochronousTransfer
 
-#define usbd_IMPORTS_start DECLARE_IMPORT_TABLE(usbd, 1, 3)
+#define usbd_IMPORTS_start DECLARE_IMPORT_TABLE(usbd, 1, 4)
 #define usbd_IMPORTS_end   END_IMPORT_TABLE
 
 #define I_sceUsbdRegisterLdd              DECLARE_IMPORT(4, sceUsbdRegisterLdd)
@@ -356,6 +356,9 @@ extern int sceUsbdMultiIsochronousTransfer(int pipeId, sceUsbdMultiIsochronousRe
 #define I_sceUsbdGetReportDescriptor      DECLARE_IMPORT(17, sceUsbdGetReportDescriptor)
 #define I_sceUsbdMultiIsochronousTransfer DECLARE_IMPORT(18, sceUsbdMultiIsochronousTransfer)
 #define I_sceUsbdGetEnumerationInfo       DECLARE_IMPORT(19, sceUsbdGetEnumerationInfo)
+#define I_sceUsbdGetPipeInfo              DECLARE_IMPORT(20, sceUsbdGetPipeInfo)
+
+extern int sceUsbdGetPipeInfo(int pipeId, u32 output[8]);
 
 // For backwards compatibility:
 #define I_UsbCallbackProc                 I_sceUsbdDoneCallback

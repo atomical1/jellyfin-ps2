@@ -1,5 +1,5 @@
 
-DECLARE_EXPORT_TABLE(usbd, 1, 3)
+DECLARE_EXPORT_TABLE(usbd, 1, 4)
 DECLARE_EXPORT(_start)
 DECLARE_EXPORT(_retonly)
 DECLARE_EXPORT(usbdReboot)
@@ -20,6 +20,7 @@ DECLARE_EXPORT(sceUsbdChangeThreadPriority)
 DECLARE_EXPORT(sceUsbdGetReportDescriptor)
 DECLARE_EXPORT(sceUsbdMultiIsochronousTransfer)
 DECLARE_EXPORT(sceUsbdGetEnumerationInfo)
+DECLARE_EXPORT(sceUsbdGetPipeInfo)
 END_EXPORT_TABLE
 
 void _retonly() {}

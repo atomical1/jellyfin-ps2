@@ -24,8 +24,9 @@ typedef struct {
 
 static volatile int device = -1, disconnected, enabled;
 static int control_pipe = -1, rx_pipe = -1, tx_pipe = -1, net_id = -1;
+static int notification_pipe = -1;
 static int tx_max_packet, config_value, bcd_device;
-static UsbEndpointDescriptor input_endpoint, output_endpoint;
+static UsbEndpointDescriptor input_endpoint, output_endpoint, notification_endpoint;
 static int link_up, link_mode = NETMAN_NETIF_ETH_LINK_MODE_AUTO;
 static unsigned char mac[6];
 static volatile Ax88179Status status;
@@ -35,8 +36,10 @@ static UsbDeviceRequest request;
 static unsigned char control_buffer[64] __attribute__((aligned(64)));
 static unsigned char rx_buffer[AX_RX_BUFFER_SIZE] __attribute__((aligned(64)));
 static unsigned char tx_buffer[AX_FRAME_MAX + 16] __attribute__((aligned(64)));
-static Completion control_io, rx_io, tx_io;
+static unsigned char notification_buffer[64] __attribute__((aligned(64)));
+static Completion control_io, rx_io, tx_io, notification_io;
 static int rx_pending, tx_pending;
+static int notification_pending;
 static unsigned int tx_age;
 static unsigned int enumeration_info[16];
 
@@ -206,6 +209,13 @@ static int interface_ioctl(unsigned int command, void *args,
 {
     (void)args; (void)args_len;
     switch (command) {
+    case AX88179_IOCTL_PIPES: {
+        u32 info[16] = {0};
+        if (!out || len < sizeof(info)) return -EINVAL;
+        if (rx_pipe >= 0) sceUsbdGetPipeInfo(rx_pipe, info);
+        if (notification_pipe >= 0) sceUsbdGetPipeInfo(notification_pipe, info + 8);
+        memcpy(out, info, sizeof(info)); return 0;
+    }
     case AX88179_IOCTL_REGISTERS:
         if (!out || len < sizeof(registers)) return -EINVAL;
         memcpy(out, &registers, sizeof(registers)); return 0;
@@ -260,8 +270,10 @@ static void close_pipes(void)
 {
     if (rx_pipe >= 0) sceUsbdClosePipe(rx_pipe);
     if (tx_pipe >= 0) sceUsbdClosePipe(tx_pipe);
+    if (notification_pipe >= 0) sceUsbdClosePipe(notification_pipe);
     if (control_pipe >= 0) sceUsbdClosePipe(control_pipe);
     rx_pipe = tx_pipe = control_pipe = -1;
+    notification_pipe = -1;
     /* Static buffers remain resident for any queued cancellation callbacks.
      * USB reattachment requires relaunching the ELF, so no stale operation
      * can complete into a buffer reused by another device. */
@@ -274,7 +286,7 @@ static int read_descriptors(int id)
 {
     UsbConfigDescriptor *cfg;
     UsbDeviceDescriptor *dev;
-    UsbEndpointDescriptor *in = NULL, *out = NULL;
+    UsbEndpointDescriptor *in = NULL, *out = NULL, *notification = NULL;
     unsigned char *p, *end;
     int match = 0;
     dev = sceUsbdScanStaticDescriptor(id, NULL, USB_DT_DEVICE);
@@ -294,6 +306,11 @@ static int read_descriptors(int id)
             if ((ep->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) == USB_ENDPOINT_XFER_BULK) {
                 if (ep->bEndpointAddress & USB_DIR_IN) in = ep;
                 else out = ep;
+            } else if ((ep->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK) == USB_ENDPOINT_XFER_INT &&
+                       (ep->bEndpointAddress & USB_DIR_IN) &&
+                       ep->wMaxPacketSizeLB >= 8 && ep->wMaxPacketSizeLB <= 64 &&
+                       ep->wMaxPacketSizeHB == 0) {
+                notification = ep;
             }
         }
         p += p[0];
@@ -305,6 +322,12 @@ static int read_descriptors(int id)
         return -1;
     memcpy(&input_endpoint, in, sizeof(input_endpoint));
     memcpy(&output_endpoint, out, sizeof(output_endpoint));
+    /* AX88179A firmware owns link configuration. Wait for its notification
+     * rather than racing it with periodic PHY-status reads. */
+    if (bcd_device >= 0x0200) {
+        if (!notification) return -1;
+        memcpy(&notification_endpoint, notification, sizeof(notification_endpoint));
+    }
     return 0;
 }
 
@@ -318,6 +341,10 @@ static int initialize_chip(void)
     rx_pipe = sceUsbdOpenPipeAligned(device, &input_endpoint);
     tx_pipe = sceUsbdOpenPipeAligned(device, &output_endpoint);
     if (control_pipe < 0 || rx_pipe < 0 || tx_pipe < 0) return -1;
+    if (bcd_device >= 0x0200) {
+        notification_pipe = sceUsbdOpenPipeAligned(device, &notification_endpoint);
+        if (notification_pipe < 0) return -1;
+    }
     if (control(0x00, USB_REQ_SET_CONFIGURATION, config_value, 0, NULL, 0) < 0)
         return -1;
     DelayThread(10000);
@@ -343,11 +370,11 @@ static int initialize_chip(void)
     return 0;
 }
 
-static int update_link(void)
+static int update_link(int force)
 {
     unsigned short phy, medium = 0x0130;
     if (phy_read(0x11, &phy) < 0) return -1;
-    if (phy == status.phy_status) return 0;
+    if (!force && phy == status.phy_status) return 0;
     status.phy_status = phy;
     if (!(phy & 0x0400)) { set_link(0); status.state = AX_READY; return 0; }
     if (phy & 0x2000) medium |= 2;
@@ -361,6 +388,37 @@ static int update_link(void)
         NETMAN_NETIF_ETH_LINK_MODE_10M_FDX : NETMAN_NETIF_ETH_LINK_MODE_10M_HDX;
     status.state = AX_LINK_UP;
     set_link(1);
+    return 0;
+}
+
+static int service_notifications(void)
+{
+    int rc;
+    if (notification_pending && notification_io.done) {
+        notification_pending = 0;
+        if (notification_io.result != USB_RC_OK && notification_io.result != USB_RC_DATAUNDER) {
+            status.usb_error = notification_io.result; return -1;
+        }
+        if (notification_io.count < 8 || notification_io.count > notification_endpoint.wMaxPacketSizeLB) {
+            status.usb_error = -7; return -1;
+        }
+        ++registers.notifications;
+        registers.last_notification = (unsigned int)notification_buffer[0] |
+            ((unsigned int)notification_buffer[1] << 8) |
+            ((unsigned int)notification_buffer[2] << 16) |
+            ((unsigned int)notification_buffer[3] << 24);
+        if (!(registers.last_notification & 0x00010000u)) {
+            set_link(0);
+            status.state = AX_READY;
+        } else if (!link_up && update_link(1) < 0) return -1;
+    }
+    if (!notification_pending) {
+        notification_io.done = 0;
+        rc = sceUsbdTransferPipe(notification_pipe, notification_buffer, notification_endpoint.wMaxPacketSizeLB,
+                                 NULL, complete, &notification_io);
+        if (rc != USB_RC_OK) { status.usb_error = rc; return -1; }
+        notification_pending = 1;
+    }
     return 0;
 }
 
@@ -461,10 +519,13 @@ static void worker(void *arg)
         if (initialize_chip() < 0) goto failed;
         while (enabled && !disconnected) {
             status.stage = 5;
+            if (notification_pipe >= 0 && service_notifications() < 0) goto failed;
             if (service_receive() < 0 || service_transmit() < 0) goto failed;
             if (ticks++ % 250 == 0) {
                 scan_bus();
-                if (update_link() < 0) goto failed;
+                /* Only the original AX88179 needs periodic PHY polling.
+                 * AX88179A uses its firmware's USB link notifications. */
+                if (notification_pipe < 0 && update_link(0) < 0) goto failed;
             }
             DelayThread(1000);
         }

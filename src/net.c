@@ -89,7 +89,7 @@ static void usb_detection_log(const Ax88179Status *usb)
 	         separator ? (int)(separator - base + 1) : 0, base);
 	FILE *file = fopen(path, "w");
 	if (!file) return;
-	fprintf(file, "Jellyfin PS2 USB network diagnostic 6\n"
+	fprintf(file, "Jellyfin PS2 USB network diagnostic 7\n"
 	        "build=%s\nstate=%d stage=%d usb_result=%d\n"
 	        "ready_devices=%u probe_calls=%u\n"
 	        "port1=%08X port2=%08X\n",
@@ -129,12 +129,22 @@ static void usb_detection_log(const Ax88179Status *usb)
 		fprintf(file, "registers_valid=%u rx_restarts=%u fifo=%08X rx_control=%04X "
 		        "medium=%04X usb_speed=%02X clock=%02X\n"
 		        "bulk=%02X:%02X:%02X:%02X:%02X endpoint_in=%02X endpoint_out=%02X revision=%04X config=%u\n"
-		        "node=%02X:%02X:%02X:%02X:%02X:%02X\n",
+		        "node=%02X:%02X:%02X:%02X:%02X:%02X\n"
+		        "link_notifications=%u last_notification=%08X\n",
 		        registers.valid, registers.restarts, registers.fifo_status, registers.rx_control,
 		        registers.medium, registers.usb_status, registers.clock,
 		        registers.bulk[0], registers.bulk[1], registers.bulk[2], registers.bulk[3], registers.bulk[4],
 		        registers.in_endpoint, registers.out_endpoint, registers.revision, registers.configuration,
-		        registers.node[0], registers.node[1], registers.node[2], registers.node[3], registers.node[4], registers.node[5]);
+                registers.node[0], registers.node[1], registers.node[2], registers.node[3], registers.node[4], registers.node[5],
+		        registers.notifications, registers.last_notification);
+	}
+	unsigned int pipes[16];
+	if (NetManIoctl(AX88179_IOCTL_PIPES, NULL, 0, pipes, sizeof(pipes)) == 0) {
+		for (int i = 0; i < 2; ++i) {
+			unsigned int *p = pipes + i * 8;
+			fprintf(file, "%s_pipe: id=%u endpoint=%08X flags=%08X td=%08X requested=%u progressed=%u hc=%08X queued=%08X\n",
+			        i ? "notification" : "rx", p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+		}
 	}
 	t_ip_info info;
 	if (ps2ip_getconfig("sm0", &info) == 1) {
@@ -166,7 +176,7 @@ const char *net_link_help(void)
 	usb_detection_log(&usb);
 	if (usb.state == AX_WAITING) {
 		snprintf(message, sizeof(message),
-		         "USB diag6: ready=%u probes=%u ports=%08X/%08X. "
+		         "USB diag7: ready=%u probes=%u ports=%08X/%08X. "
 		         "IDs=%04X:%04X %04X:%04X %04X:%04X %04X:%04X. "
 		         "Log: jfusbethernet.txt",
 		         usb.usb_devices_seen, usb.probe_count,
@@ -203,7 +213,7 @@ const char *net_address_help(void)
 	if (NetManIoctl(AX88179_IOCTL_STATUS, NULL, 0, &usb, sizeof(usb)) == 0) {
 		usb_detection_log(&usb);
 		snprintf(message, sizeof(message),
-		         "DHCP: %s after %ds. USB diag6: state=%d step=%d error=%d "
+		         "DHCP: %s after %ds. USB diag7: state=%d step=%d error=%d "
 		         "TX=%u RX=%u dropped=%u/%u. Log: jfusbethernet.txt. "
 		         "Reconnect the stick to the PC after this screen.",
 		         dhcp_phase(g_dhcp_state), g_dhcp_elapsed,

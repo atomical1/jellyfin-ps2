@@ -5,9 +5,10 @@ It was written for an adapter reporting hardware revision **0200** on Windows.
 The driver switches revision 0200 and newer to the AX88179-compatible packet
 format. Other USB IDs and unrelated USB Ethernet chipsets are not supported.
 
-**Status: build 5 console testing confirms USB enumeration, Ethernet link,
-68 received frames, 7 USB sends, and DHCP reaching address-conflict checking.
-Build 6 extends the DHCP wait. A bound address and playback remain unverified.**
+**Status: receive is intermittent. Build 5 received 68 frames and reached DHCP
+address checking; build 6 then received zero frames in 30 seconds. Build 7
+uses AX88179A firmware link notifications and adds host-transfer diagnostics.
+A bound address, reliable receiving and playback remain unverified.**
 
 ## Running
 
@@ -15,7 +16,7 @@ Build 6 extends the DHCP wait. A bound address and playback remain unverified.**
 2. Insert the stick and the ASIX adapter into the two front PS2 USB ports.
 3. Connect the adapter to the router with an Ethernet cable before launching.
 4. Start `mass:/jellyfin-ps2-usb-ax88179.elf` in uLaunchELF/wLaunchELF.
-5. Confirm the splash identifies `usb-ax88179-diag6`, then press START
+5. Confirm the splash identifies `usb-ax88179-diag7`, then press START
    on the connect screen. Use the server computer's local HTTP address.
 
 The USB build loads NETMAN and the new AX88179 module. It does not load DEV9
@@ -79,7 +80,27 @@ reports DHCP phases and the log records elapsed seconds and state transitions.
 Missing interfaces, DHCP OFF and BOUND with address zero are not accepted as
 success. PS2SDK's getconfig failure value is zero, so these checks require its
 documented success value of one. This addresses a likely premature timeout;
-console confirmation of DHCP binding is still required.
+console confirmation of DHCP binding is still required. The next console run
+remained SELECTING with zero receive completions and five successful USB sends
+for 30 seconds, despite the same enabled receive register readback as build 5.
+The longer DHCP wait did not resolve the intermittent receive failure.
+
+Build 7 requires the AX88179A interface's interrupt IN endpoint and waits for
+its link notification before reading PHY status and configuring the MAC.
+Periodic PHY polling is retained only for the older AX88179. This follows a
+reported AX88179A firmware/configuration race in the Linux driver discussion;
+it is a candidate correction, not proof that the PS2 has that same defect.
+Eight-byte and sixteen-byte status records are accepted within the endpoint's
+reported packet size. Link-down events clear NETMAN link; duplicate link-up
+events do not repeatedly reset receiving. Malformed notifications fail with
+private error -7. No speculative receive reset runs periodically.
+
+The build embeds a USBD ABI 1.4 read-only diagnostic extension at ordinal 20.
+At failure, the app snapshots the receive and notification endpoint/transfer
+states, including active/halted flags, request length and bytes progressed.
+It reports controller flags and queued requests without writing OHCI registers,
+exposing memory addresses or recording packet payloads. See the vendored
+NOTICE.md for the API fields and compatibility information.
 
 The vendored module adds a read-only ABI 1.3 diagnostic extension while
 retaining the original 1.2 API ordinals. The log includes non-ready devices'
@@ -146,7 +167,8 @@ receive setup, 4 autonegotiation, 5 running transfers/link polling, 6 receive
 restart/FIFO drain, 7 register readback. USB results
 are PS2 USBD error codes; negative private results mean timeout (-1), short
 control/data transfer (-2), stuck transmit (-3), incompatible descriptors (-4),
-FIFO still busy (-5), or receive-enable readback failure (-6).
+FIFO still busy (-5), receive-enable readback failure (-6), or malformed
+link notification (-7).
 
 `tests/ax88179_link_test.py` exercises the actual receive-queue and restart
 functions with a mock controller, covering operation order, all control
@@ -155,6 +177,10 @@ This verifies driver control flow, not the behavior of a physical ASIX chip.
 `tests/dhcp_wait_test.py` exercises the actual DHCP wait functions against
 delayed offers and conflict checks, including an offer near the deadline,
 auto-mode grace, bounded failure, missing interface, client OFF and zero IP.
+`tests/ax88179_notification_test.py` exercises the real notification service
+with pending, link-up/down, duplicate, short and malformed event cases.
+`tests/usbd_pipe_test.py` exercises the actual read-only host snapshot with
+queued, active, halted, partial and complete transfers and invalid pointers.
 
 ## References and notices
 
@@ -178,6 +204,10 @@ lwIP 2.2.1, which uses ACD probes and announcements before DHCP binding:
 
 - https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_1_RELEASE/src/core/ipv4/dhcp.c
 - https://github.com/lwip-tcpip/lwip/blob/STABLE-2_2_1_RELEASE/src/core/ipv4/acd.c
+
+AX88179A firmware race and notification-driven link configuration discussion:
+
+- https://patchew.org/linux/20260810-ax88179a-v7-0-da633191c129@birger-koblitz.de/
 
 See `third_party/AX88179-NOTICE.txt` for the FreeBSD attribution and license.
 The app retains its original MIT license; the new packet helpers are MIT.

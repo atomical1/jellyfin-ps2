@@ -198,6 +198,60 @@ int sceUsbdGetEnumerationInfo(int devId, u32 output[8])
 	return USB_RC_OK;
 }
 
+/* Read-only local diagnostics for a pending bulk/interrupt transfer.
+ * No pointers or payload bytes leave this function. The controller may
+ * advance during the snapshot; USBD's lock prevents descriptor recycling. */
+int sceUsbdGetPipeInfo(int pipeId, u32 output[8])
+{
+	UsbdEndpoint_t *ep;
+	volatile UsbdHcED_t *ed;
+	volatile UsbdHcTD_t *td;
+	UsbdIoRequest_t *req;
+	uiptr head, first, offset, current, start;
+	if (!output) return USB_RC_BADOPTION;
+	if (usbdLock()) return USB_RC_BADCONTEXT;
+	memset(output, 0, 8 * sizeof(u32));
+	ep = fetchEndpointById(pipeId);
+	if (!ep || ep->m_endpointType == TYPE_ISOCHRON || ep->m_endpointType == TYPE_CONTROL) {
+		usbdUnlock(); return USB_RC_BADPIPE;
+	}
+	ed = ep->m_hcEd;
+	head = (uiptr)ed->m_tdHead;
+	output[0] = ep->m_id;
+	output[1] = ed->m_hcArea.asu32;
+	output[2] = head & 0xf;
+	output[6] = memPool->m_ohciRegs->HcControl;
+	output[7] = (ep->m_ioReqListStart ? 1u : 0u) | (ep->m_inTdQueue << 8);
+	head &= ~(uiptr)0xf;
+	if (head != (uiptr)ed->m_tdTail) {
+		first = (uiptr)memPool->m_hcTdBuf;
+		if (head < first || head >= (uiptr)memPool->m_hcTdBufEnd ||
+		    (head - first) % sizeof(UsbdHcTD_t)) {
+			output[2] |= 0x80000000u;
+		} else {
+			offset = (head - first) / sizeof(UsbdHcTD_t);
+			td = (volatile UsbdHcTD_t *)head;
+			output[2] |= 0x100;
+			output[3] = td->m_hcArea;
+			req = memPool->m_hcTdToIoReqLUT[offset];
+			start = (uiptr)memPool->m_ioReqBufPtr;
+			if ((uiptr)req >= start && (uiptr)req < start +
+			    sizeof(UsbdIoRequest_t) * usbConfig.m_maxIoReqs &&
+			    ((uiptr)req - start) % sizeof(UsbdIoRequest_t) == 0 &&
+			    req->m_correspEndpoint == ep) {
+				output[4] = req->m_length;
+				current = (uiptr)td->m_curBufPtr;
+				start = (uiptr)req->m_destPtr;
+				if (!current) output[5] = req->m_length;
+				else if (current >= start && current - start <= req->m_length)
+					output[5] = current - start;
+			}
+		}
+	}
+	usbdUnlock();
+	return USB_RC_OK;
+}
+
 int sceUsbdSetPrivateData(int devId, void *data)
 {
 	void *OldGP;

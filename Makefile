@@ -101,7 +101,7 @@ EE_LIBS = -lgskit_toolkit -lgskit -ldmakit $(PNG_LIBS) \
           -lmpeg -lpacket -ldma \
           -lnetman -lps2ip -lpatches -lkbd -lpad -ldebug -lm
 
-DISPLAY_BUILD = $(if $(BUILD),$(BUILD),$(if $(filter usb-ax88179,$(NETWORK)),usb-ax88179-diag6))
+DISPLAY_BUILD = $(if $(BUILD),$(BUILD),$(if $(filter usb-ax88179,$(NETWORK)),usb-ax88179-diag7))
 EE_CFLAGS = -Wall -O2 -G0 -DJFPS2_VERSION=\"$(VERSION)\" -DJFPS2_BUILD=\"$(DISPLAY_BUILD)\"
 EE_CFLAGS += -DJFPS2_USB_AX88179=$(USB_AX88179)
 
